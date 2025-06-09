@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: ./backend # Chemin vers le Dockerfile du backend
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001" # Mappe le port 8001 de l'hôte au port 8001 du conteneur
+    volumes:
+      - ./backend:/app # Monte le code source du backend dans /app du conteneur pour le rechargement à chaud
+    # Décommenter si vous utilisez une base de données externe gérée par Docker Compose
+    # environment:
+    #   - DATABASE_URL=postgresql://user:password@db:5432/dbname
+    # depends_on:
+    #   - db # Si vous ajoutez un service de base de données 'db'
+
+  client:
+    build:
+      context: ./frontend # Chemin vers le Dockerfile du frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000" # Mappe le port 3000 de l'hôte au port 3000 du conteneur
+    volumes:
+      - ./frontend:/app # Monte le code source du frontend dans /app pour le rechargement à chaud
+      # Il est important d'exclure node_modules du montage de volume si elles sont installées dans l'image
+      # pour éviter des conflits entre les node_modules de l'hôte et celles du conteneur.
+      # On peut le faire en spécifiant un volume anonyme pour node_modules DANS le conteneur:
+      - /app/node_modules
+      # Ou, si .next pose problème aussi (plus rare pour `npm run dev` mais possible)
+      # - /app/.next
+    environment:
+      # Surcharge la variable d'environnement pour que le client Next.js
+      # appelle le service API backend via son nom de service Docker.
+      - NEXT_PUBLIC_API_URL=http://api:8001
+      # CHOKIDAR_USEPOLLING=true peut être nécessaire sur certains systèmes pour que le hot-reloading Next.js fonctionne correctement dans Docker
+      - CHOKIDAR_USEPOLLING=true
+    depends_on:
+      - api # S'assure que le service 'api' est démarré avant 'client' (ne garantit pas que l'API est prête, juste que le conteneur est lancé)
+
+# Décommenter pour ajouter un service de base de données PostgreSQL par exemple
+# volumes:
+#   postgres_data:
+
+# services: # Note: 'services:' should be at the root level, not nested under volumes. Correcting this if it were uncommented.
+#   db:
+#     image: postgres:13
+#     volumes:
+#       - postgres_data:/var/lib/postgresql/data/
+#     environment:
+#       - POSTGRES_USER=user
+#       - POSTGRES_PASSWORD=password
+#       - POSTGRES_DB=dbname
+#     ports:
+#       - "5432:5432"
