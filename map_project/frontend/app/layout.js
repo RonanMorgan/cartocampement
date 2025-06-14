@@ -20,7 +20,7 @@ import { AuthProvider } from '@/context/AuthContext'; // Importer AuthProvider
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="fr"> {/* Changed lang to fr as per example */}
+    <html lang="fr">
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
