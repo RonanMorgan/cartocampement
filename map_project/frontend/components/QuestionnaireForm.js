@@ -19,10 +19,10 @@ export default function QuestionnaireForm() {
   const fieldTypes = [
     { value: 'text', name: 'Texte court' },
     { value: 'number', name: 'Chiffre' },
-    { value: 'coordinates_lat', name: 'Coordonnée (Latitude)' },
-    { value: 'coordinates_lon', name: 'Coordonnée (Longitude)' },
+    { value: 'map_coordinates', name: 'Coordonnées géographiques (carte)' }, // Nouvelle option
     { value: 'date', name: 'Date' },
     { value: 'email', name: 'Adresse e-mail' },
+    // On pourrait aussi ajouter un type 'textarea' pour du texte long si souhaité
   ];
 
   const addElement = () => {

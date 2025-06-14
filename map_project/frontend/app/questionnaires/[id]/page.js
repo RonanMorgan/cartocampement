@@ -3,14 +3,17 @@
 
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { fetchApi } from '@/lib/api'; // Importer fetchApi
-// Importer useAuth si on veut vérifier si l'utilisateur est le propriétaire pour bypasser le mdp
-// import { useAuth } from '@/context/AuthContext';
+import { fetchApi } from '@/lib/api';
+import dynamic from 'next/dynamic'; // Import pour dynamic
+
+const CoordinateInputMapWithNoSSR = dynamic(
+  () => import('@/components/CoordinateInputMap'),
+  { ssr: false, loading: () => <p>Chargement de la carte...</p> }
+);
 
 export default function RemplirQuestionnairePage() {
   const params = useParams();
-  const { id } = params || {}; // Ensure params is not null
-  // const { user } = useAuth(); // Pourrait être utilisé pour vérifier la propriété
+  const { id } = params || {};
 
   const [questionnaire, setQuestionnaire] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -19,39 +22,24 @@ export default function RemplirQuestionnairePage() {
   const [questionnairePassword, setQuestionnairePassword] = useState('');
   const [submitMessage, setSubmitMessage] = useState('');
 
-
   useEffect(() => {
     const loadQuestionnaire = async () => {
       setLoading(true);
       setError(null);
-      setSubmitMessage(''); // Clear previous submit messages
+      setSubmitMessage('');
       try {
-        // Pour l'instant, on ne passe pas de X-Questionnaire-Password pour la lecture.
-        // Le backend gère si le propriétaire y accède ou s'il est public sans mdp.
-        // Si un mdp est requis pour la lecture par un anonyme, l'API lèvera une erreur.
         const data = await fetchApi(`/questionnaires/${id}`);
         setQuestionnaire(data);
       } catch (err) {
         console.error("Erreur chargement questionnaire:", err);
         if (err.status === 401 || err.status === 403) {
             setError(`Ce questionnaire est protégé par mot de passe ou n'est pas accessible. Si un mot de passe est requis, veuillez le fournir ci-dessous pour la soumission.`);
-            // On met un questionnaire partiel pour que le champ mdp s'affiche si le questionnaire existe mais est protégé.
-            // Le backend ne renvoie pas le titre si l'accès est refusé par mot de passe, donc on met un titre générique.
-            // On se fie au fait que `questionnaire.password` sera présent dans la réponse (même si null) si le questionnaire existe.
-            // Si le questionnaire n'existe pas (404), `err.data` pourrait ne pas avoir `password`.
-            // Le backend, pour un GET sur un questionnaire protégé SANS token owner ET SANS X-Questionnaire-Password,
-            // va retourner 401 ou 403 (selon le cas exact de la protection).
-            // Il ne renverra PAS le questionnaire. Donc, si on arrive ici avec 401/403,
-            // on sait qu'il est protégé. On va simuler un questionnaire avec un champ password pour que l'UI s'affiche.
             setQuestionnaire({
                 id,
                 title: "Questionnaire Protégé",
                 description: "Ce questionnaire nécessite un mot de passe. Veuillez le fournir pour soumettre vos réponses.",
-                elements: [], // Pas d'éléments affichés tant que le mot de passe n'est pas validé (pour la soumission)
-                password: "protected" // Indicateur pour l'UI que le champ mdp est nécessaire pour la soumission
-                                     // Note: le backend renvoie le hash du mot de passe s'il existe, ou null.
-                                     // Si on a 401/403, on ne reçoit pas le questionnaire.
-                                     // On met "protected" juste pour que `questionnaire.password` soit truthy.
+                elements: [],
+                password: "protected"
             });
         } else {
             setError(err.data?.detail || err.message || "Impossible de charger le questionnaire.");
@@ -68,8 +56,15 @@ export default function RemplirQuestionnairePage() {
     }
   }, [id]);
 
-  const handleInputChange = (elementId, value) => {
-    setFormData(prev => ({ ...prev, [elementId]: value }));
+  const handleInputChange = (elementId, value, isCoordinates = false) => {
+    if (isCoordinates) { // value sera un objet { lat, lng }
+      setFormData(prev => ({
+        ...prev,
+        [elementId]: value // Stocker l'objet {lat, lng} directement
+      }));
+    } else { // Pour les inputs classiques, value est une string
+      setFormData(prev => ({ ...prev, [elementId]: value }));
+    }
   };
 
   const handleSubmit = async (event) => {
@@ -77,7 +72,7 @@ export default function RemplirQuestionnairePage() {
     setError(null);
     setSubmitMessage('');
 
-    if (!questionnaire || !questionnaire.elements) { // Check if questionnaire or elements are loaded
+    if (!questionnaire || (!questionnaire.elements && questionnaire.title !== "Questionnaire Protégé")) {
         setError("Le questionnaire n'est pas complètement chargé ou n'a pas de questions.");
         return;
     }
@@ -86,18 +81,20 @@ export default function RemplirQuestionnairePage() {
     let latitude = null;
     let longitude = null;
 
-    questionnaire.elements.forEach(el => {
+    // Itérer sur les éléments DÉFINIS dans le questionnaire pour construire le payload
+    // et non sur les clés de formData qui pourraient contenir d'anciennes données si la structure du Q change.
+    questionnaire.elements?.forEach(el => {
         const value = formData[el.id];
-        if (value !== undefined && value !== null && value !== '') { // Only include answered questions
-            if (el.field_type === 'coordinates_lat') {
-                const parsedLat = parseFloat(value);
-                if (!isNaN(parsedLat)) latitude = parsedLat;
-            } else if (el.field_type === 'coordinates_lon') {
-                const parsedLon = parseFloat(value);
-                if (!isNaN(parsedLon)) longitude = parsedLon;
+        if (value !== undefined && value !== null && value !== '') {
+            if (el.field_type === 'map_coordinates') {
+                // formData[el.id] should be an object like { lat: ..., lng: ... }
+                if (value && typeof value.lat === 'number' && typeof value.lng === 'number') {
+                    latitude = value.lat;
+                    longitude = value.lng;
+                }
+                // Do not add map_coordinates to dataValuesPayload as it's handled at root
             } else {
-                // Backend expects keys to be element labels for data_values
-                dataValuesPayload[el.label] = value;
+                dataValuesPayload[el.label] = value; // Use label as key for backend
             }
         }
     });
@@ -106,12 +103,10 @@ export default function RemplirQuestionnairePage() {
       data_values: dataValuesPayload,
       latitude: latitude,
       longitude: longitude,
-      // submitter_name: "Un bénévole", // This could be a separate field in the form
+      // submitter_name: "Un bénévole", // Placeholder, can be added as a form field
     };
 
     const headers = {};
-    // `questionnaire.password` ici est le vrai champ password du backend (hash ou null)
-    // ou la valeur "protected" qu'on a mis si le GET initial a échoué par 401/403
     if (questionnaire.password) {
       if (!questionnairePassword) {
         setError('Ce questionnaire nécessite un mot de passe pour la soumission.');
@@ -137,18 +132,15 @@ export default function RemplirQuestionnairePage() {
 
   if (loading && !error && !questionnaire) return <div className="container mx-auto p-4 text-center">Chargement du questionnaire...</div>;
 
-  // Si une erreur de chargement s'est produite et qu'aucun questionnaire (même partiel) n'a été défini
   if (error && (!questionnaire || (questionnaire.title === "Questionnaire Protégé" && questionnaire.elements.length === 0) )) {
-      // Afficher l'erreur et le formulaire de mot de passe si c'est une erreur de protection
       if (questionnaire && questionnaire.password === "protected") {
-          // Continue to render form below, error is already set
+        // Continue to render form below for password input, error is already set and will be displayed
       } else {
         return <div className="container mx-auto p-4 text-red-500 text-center">Erreur: {error}</div>;
       }
   }
 
-  if (!questionnaire) return <div className="container mx-auto p-4 text-center">Questionnaire introuvable ou ID non fourni.</div>;
-
+  if (!questionnaire) return <div className="container mx-auto p-4 text-center">Questionnaire introuvable ou problème de chargement.</div>;
 
   return (
     <div className="container mx-auto p-4">
@@ -167,29 +159,49 @@ export default function RemplirQuestionnairePage() {
             <input
               type="password" name="questionnairePassword" id="questionnairePassword"
               value={questionnairePassword} onChange={(e) => setQuestionnairePassword(e.target.value)}
-              required={(questionnaire.elements && questionnaire.elements.length > 0)} // Only truly required if there's a form to submit
+              required={questionnaire.elements && questionnaire.elements.length > 0 || questionnaire.password === "protected"}
               className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
             />
           </div>
         )}
 
-        {questionnaire.elements && questionnaire.elements.map(element => (
-          <div key={element.id}>
-            <label htmlFor={element.id.toString()} className="block text-sm font-medium text-gray-700">
-              {element.label}
-            </label>
-            <input
-              type={element.field_type === 'number' ? 'number' : (element.field_type === 'date' ? 'date' : (element.field_type === 'email' ? 'email' : 'text'))}
-              name={element.id.toString()}
-              id={element.id.toString()}
-              value={formData[element.id] || ''}
-              onChange={(e) => handleInputChange(element.id, e.target.value)}
-              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-            />
-          </div>
-        ))}
+        {questionnaire.elements && questionnaire.elements.map(element => {
+          if (element.field_type === 'map_coordinates') {
+            return (
+              <div key={element.id} className="mb-4 p-3 border rounded-md shadow-sm">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {element.label}
+                </label>
+                <CoordinateInputMapWithNoSSR
+                  value={formData[element.id] || null}
+                  onChange={(coords) => handleInputChange(element.id, coords, true)}
+                />
+                {formData[element.id] && formData[element.id].lat && formData[element.id].lng && (
+                  <p className="text-xs text-gray-600 mt-2">
+                    Sélectionné : Latitude: {formData[element.id].lat.toFixed(5)}, Longitude: {formData[element.id].lng.toFixed(5)}
+                  </p>
+                )}
+              </div>
+            );
+          } else {
+            return (
+              <div key={element.id} className="mb-4">
+                <label htmlFor={element.id.toString()} className="block text-sm font-medium text-gray-700">
+                  {element.label}
+                </label>
+                <input
+                  type={element.field_type === 'number' ? 'number' : (element.field_type === 'date' ? 'date' : (element.field_type === 'email' ? 'email' : 'text'))}
+                  name={element.id.toString()}
+                  id={element.id.toString()}
+                  value={formData[element.id] || ''}
+                  onChange={(e) => handleInputChange(element.id, e.target.value)}
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                />
+              </div>
+            );
+          }
+        })}
 
-        {/* Show submit button only if there are elements or if it's a protected questionnaire just to enter password */}
         {(questionnaire.elements && questionnaire.elements.length > 0) || questionnaire.password === "protected" ? (
             <button
               type="submit"
